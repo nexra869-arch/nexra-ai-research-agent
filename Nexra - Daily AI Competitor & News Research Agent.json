@@ -1,0 +1,571 @@
+{
+  "name": "Nexra - Daily AI Competitor & News Research Agent",
+  "nodes": [
+    {
+      "parameters": {
+        "rule": {
+          "interval": [
+            {
+              "field": "cronExpression",
+              "expression": "0 8 * * *"
+            }
+          ]
+        }
+      },
+      "id": "f03fe2c9-56f5-4617-a660-60b8bdc2b6c8",
+      "name": "Schedule Trigger",
+      "type": "n8n-nodes-base.scheduleTrigger",
+      "typeVersion": 1.2,
+      "position": [
+        -752,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "assignments": {
+          "assignments": [
+            {
+              "id": "cfg1",
+              "name": "CONFIG_JSON",
+              "type": "string",
+              "value": "{\"COMPANY_NAME\": \"Nexra\", \"LANGUAGE\": \"Arabic\", \"RESEARCH_TIME\": \"08:00\", \"RESEARCH_FREQUENCY\": \"Daily\", \"NEWS_LOOKBACK_HOURS\": 72, \"COMPETITOR_LIMIT\": 10, \"MAX_COMPETITOR_RESULTS\": 10, \"MAX_NEWS_RESULTS\": 8, \"MAX_CONTENT_OPPORTUNITIES\": 5, \"MIN_RELEVANCE_SCORE\": 8, \"MIN_QUALITY_SCORE\": 8, \"KEYWORDS\": [\"AI automation\", \"AI agents\", \"business automation\", \"sales automation\", \"revenue automation\", \"AI workflows\", \"B2B AI automation\", \"workflow automation\"], \"COMPETITOR_ACCOUNTS\": [{\"name\": \"Example Competitor 1\", \"x\": \"https://twitter.com/example1\", \"linkedin\": \"https://www.linkedin.com/company/example1\", \"website\": \"https://example1.com\"}, {\"name\": \"Example Competitor 2\", \"x\": \"https://twitter.com/example2\", \"linkedin\": \"https://www.linkedin.com/company/example2\", \"website\": \"https://example2.com\"}], \"AI_MODEL\": \"gemini-3.6-flash\"}"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "cd9a26ad-f5a4-4ac2-976c-2f7d2f70e999",
+      "name": "Config",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 3.4,
+      "position": [
+        -512,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst cfg = JSON.parse($('Config').first().json.CONFIG_JSON);\nconst lookbackDays = Math.max(1, Math.ceil(cfg.NEWS_LOOKBACK_HOURS / 24));\n\nconst items = cfg.KEYWORDS.map(keyword => {\n  const q = `${keyword} when:${lookbackDays}d`;\n  const url = `https://news.google.com/rss/search?q=${encodeURIComponent(q)}&hl=en-US&gl=US&ceid=US:en`;\n  return { json: { url, keyword } };\n});\n\nreturn items;\n"
+      },
+      "id": "6a48a6ba-f6ad-496e-bdd9-d2a1f4740333",
+      "name": "Build News Queries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -272,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst cfg = JSON.parse($('Config').first().json.CONFIG_JSON);\nconst queries = [];\n\n// Targeted searches per competitor account (public search results only)\nfor (const acc of cfg.COMPETITOR_ACCOUNTS) {\n  if (acc.name) {\n    queries.push({ query: `site:twitter.com OR site:x.com \"${acc.name}\"`, account: acc.name, hint: 'x' });\n    queries.push({ query: `site:linkedin.com \"${acc.name}\"`, account: acc.name, hint: 'linkedin' });\n  }\n}\n\n// Generic targeted topic searches (section 6 of the brief)\nfor (const kw of cfg.KEYWORDS) {\n  queries.push({ query: `\"${kw}\" (site:twitter.com OR site:x.com OR site:linkedin.com)`, account: null, hint: 'topic' });\n}\n\nreturn queries.map(q => ({ json: q }));\n"
+      },
+      "id": "a6fda5e1-f821-4281-bcd1-8d0405019cca",
+      "name": "Build Competitor Queries",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -272,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{$json.url}}",
+        "options": {}
+      },
+      "id": "36c15dc4-fc0d-4b0a-b4af-11aa7706808c",
+      "name": "Fetch News RSS",
+      "type": "n8n-nodes-base.rssFeedRead",
+      "typeVersion": 1.1,
+      "position": [
+        -32,
+        96
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "url": "https://www.googleapis.com/customsearch/v1",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "key",
+              "value": "YOUR_GOOGLE_CSE_API_KEY"
+            },
+            {
+              "name": "cx",
+              "value": "YOUR_GOOGLE_CSE_ID"
+            },
+            {
+              "name": "q",
+              "value": "={{$json.query}}"
+            },
+            {
+              "name": "num",
+              "value": "5"
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "ef58bc51-3295-461a-9077-461a2f52b3c6",
+      "name": "Search Competitors (Google CSE)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -32,
+        400
+      ],
+      "onError": "continueRegularOutput"
+    },
+    {
+      "parameters": {
+        "mode": "runOnceForEachItem",
+        "jsCode": "\n// RSS Feed Read outputs one item per article, fields: title, link, pubDate, isoDate, contentSnippet\nconst item = $input.item.json;\n\nfunction domainOf(url) {\n  try { return new URL(url).hostname.replace('www.', ''); } catch (e) { return 'unknown'; }\n}\n\nreturn {\n  json: {\n    category: 'news',\n    title: item.title || 'Untitled',\n    url: item.link || item.guid || '',\n    platform: 'Google Search / News',\n    sourceName: domainOf(item.link || ''),\n    publishedDate: item.isoDate || item.pubDate || null,\n    snippet: item.contentSnippet || item.content || '',\n    engagement: 'Not applicable (news item).'\n  }\n};\n"
+      },
+      "id": "b943ed84-8527-4469-ba13-5a50aac648f8",
+      "name": "Normalize News",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        96
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst all = $input.all();\nconst out = [];\n\nfunction detectPlatform(url) {\n  const u = (url || '').toLowerCase();\n  if (u.includes('twitter.com') || u.includes('x.com')) return 'X / Twitter';\n  if (u.includes('linkedin.com')) return 'LinkedIn';\n  return 'Google Search';\n}\n\nfor (const item of all) {\n  const res = item.json;\n  const results = res.items || [];\n  for (const r of results) {\n    out.push({\n      json: {\n        category: 'competitor',\n        title: r.title || 'Untitled',\n        url: r.link,\n        platform: detectPlatform(r.link),\n        sourceName: r.displayLink || '',\n        publishedDate: null,\n        snippet: r.snippet || '',\n        engagement: 'Engagement data unavailable.'\n      }\n    });\n  }\n}\n\nreturn out;\n"
+      },
+      "id": "29dfd0f2-d475-49ac-9303-e727df9ad417",
+      "name": "Normalize Competitor Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        208,
+        400
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst cfg = JSON.parse($('Config').first().json.CONFIG_JSON);\nconst staticData = $getWorkflowStaticData('global');\nstaticData.seenUrls = staticData.seenUrls || {};\n\nconst now = Date.now();\nconst THIRTY_DAYS = 30 * 24 * 60 * 60 * 1000;\n\n// Prune old memory entries so it never grows unbounded\nfor (const url of Object.keys(staticData.seenUrls)) {\n  if (now - (staticData.seenUrls[url].reportedAt || 0) > THIRTY_DAYS) {\n    delete staticData.seenUrls[url];\n  }\n}\n\nconst all = $input.all().map(i => i.json).filter(i => i.url);\n\n// Deduplicate within this run by URL\nconst uniqueByUrl = {};\nfor (const it of all) {\n  if (!uniqueByUrl[it.url]) uniqueByUrl[it.url] = it;\n}\n\nconst fresh = Object.values(uniqueByUrl).filter(it => !staticData.seenUrls[it.url]);\n\nconst newsItems = fresh.filter(i => i.category === 'news').slice(0, cfg.MAX_NEWS_RESULTS * 4);\nconst competitorItems = fresh.filter(i => i.category === 'competitor').slice(0, cfg.MAX_COMPETITOR_RESULTS * 4);\n\nreturn [{\n  json: {\n    config: cfg,\n    newsItems,\n    competitorItems,\n    totalNew: newsItems.length + competitorItems.length\n  }\n}];\n"
+      },
+      "id": "3b835576-339d-4576-9492-1374d48ea1b9",
+      "name": "Dedupe & Filter",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        448,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "options": {
+            "caseSensitive": true,
+            "leftValue": "",
+            "typeValidation": "loose",
+            "version": 1
+          },
+          "conditions": [
+            {
+              "id": "cond1",
+              "leftValue": "={{$json.totalNew}}",
+              "rightValue": 0,
+              "operator": {
+                "type": "number",
+                "operation": "gt"
+              }
+            }
+          ],
+          "combinator": "and"
+        },
+        "options": {}
+      },
+      "id": "4581a57a-eae0-4e46-95ea-f1ab49db4915",
+      "name": "Have New Items?",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2.2,
+      "position": [
+        688,
+        240
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst data = $input.item.json;\nconst cfg = data.config;\n\nconst systemPrompt = `You are Nexra's Senior AI & Automation Research Analyst.\nNexra is an AI Automation agency building AI Agents, workflow automation, CRM/sales/marketing automation, and AI-powered systems for B2B and SMB clients.\n\nYour job: analyze the raw search results below and produce a strategic research briefing.\n\nRULES:\n- Never invent engagement numbers, dates, authors, or facts. If unavailable, keep the original \"engagement\" field text as-is.\n- Rank competitor content using: Relevance 30%, Engagement 25%, Content Quality 20%, Business Value 15%, Originality 10%.\n- Only keep items with an estimated relevance+quality score at or above ${cfg.MIN_RELEVANCE_SCORE} and ${cfg.MIN_QUALITY_SCORE} (out of 10) respectively.\n- Return at most ${cfg.MAX_COMPETITOR_RESULTS} competitor items and ${cfg.MAX_NEWS_RESULTS} news items, the strongest ones only. Quality over quantity - return fewer if that's all that qualifies.\n- Deduplicate near-identical news stories into a single entry, listing extra sources in \"additionalSources\".\n- Classify each kept item priority as \"high\", \"medium\", or \"low\".\n- Generate ${cfg.MAX_CONTENT_OPPORTUNITIES} ORIGINAL Nexra content opportunities inspired by (never copied or paraphrased sentence-by-sentence from) the research. Each needs a unique angle, not just \"write about topic X\".\n- Respond with STRICT JSON ONLY, no markdown fences, no commentary, matching exactly this schema:\n{\n  \"competitorContent\": [\n    {\"title\": \"\", \"platform\": \"\", \"creator\": \"\", \"engagement\": \"\", \"whyItMatters\": \"\", \"url\": \"\", \"priority\": \"high|medium|low\"}\n  ],\n  \"news\": [\n    {\"headline\": \"\", \"sourcePlatform\": \"\", \"publishedDate\": \"\", \"whyItMattersToNexra\": \"\", \"contentAngle\": \"\", \"url\": \"\", \"additionalSources\": [], \"priority\": \"high|medium|low\"}\n  ],\n  \"contentOpportunities\": [\n    {\"topic\": \"\", \"angle\": \"\", \"whyItCouldWork\": \"\", \"suggestedHook\": \"\"}\n  ]\n}`;\n\nconst userPrompt = `Language for the output text: ${cfg.LANGUAGE}\n\nCOMPETITOR / TOPIC SEARCH RESULTS (raw, may include noise - filter aggressively):\n${JSON.stringify(data.competitorItems)}\n\nNEWS RESULTS (raw, may include duplicates - group them):\n${JSON.stringify(data.newsItems)}`;\n\nreturn [{\n  json: {\n    config: cfg,\n    systemPrompt,\n    userPrompt\n  }\n}];\n"
+      },
+      "id": "1877a087-4508-4319-b53b-79db78e23505",
+      "name": "Build AI Prompt",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        928,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "=https://generativelanguage.googleapis.com/v1beta/models/{{$json.config.AI_MODEL}}:generateContent",
+        "sendQuery": true,
+        "queryParameters": {
+          "parameters": [
+            {
+              "name": "key",
+              "value": "AQ.Ab8RN6K4CjYtRkqqTbLcV4TMd4OYRBYNzztS3vBfzMBAdIjVVA"
+            }
+          ]
+        },
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "content-type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "specifyBody": "json",
+        "jsonBody": "={{ JSON.stringify({ system_instruction: { parts: [{ text: $json.systemPrompt }] }, contents: [{ parts: [{ text: $json.userPrompt }] }], generationConfig: { responseMimeType: 'application/json', temperature: 0.4 } }) }}",
+        "options": {}
+      },
+      "id": "80744af5-3c49-4fc2-addd-39c6384c7adf",
+      "name": "AI Research Analyst (Gemini)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        1168,
+        128
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst cfg = JSON.parse($('Config').first().json.CONFIG_JSON);\nconst response = $input.item.json;\n\nlet rawText = '';\ntry {\n  rawText = response.candidates[0].content.parts[0].text;\n} catch (e) {\n  throw new Error('Unexpected AI response shape: ' + JSON.stringify(response).slice(0, 500));\n}\n\nconst cleaned = rawText.replace(/```json/g, '').replace(/```/g, '').trim();\n\nlet parsed;\ntry {\n  parsed = JSON.parse(cleaned);\n} catch (e) {\n  throw new Error('Failed to parse AI JSON output: ' + e.message);\n}\n\nparsed.competitorContent = parsed.competitorContent || [];\nparsed.news = parsed.news || [];\nparsed.contentOpportunities = parsed.contentOpportunities || [];\n\nreturn [{ json: { config: cfg, result: parsed } }];\n"
+      },
+      "id": "e36b8646-4f23-4d6d-8235-c635574c41fa",
+      "name": "Parse AI Output",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1408,
+        128
+      ],
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst staticData = $getWorkflowStaticData('global');\nstaticData.seenUrls = staticData.seenUrls || {};\nconst now = Date.now();\n\nconst cfg = JSON.parse($('Config').first().json.CONFIG_JSON);\nconst result = $input.item.json.result;\n\nfor (const c of result.competitorContent) {\n  if (c.url) staticData.seenUrls[c.url] = { reportedAt: now };\n}\nfor (const n of result.news) {\n  if (n.url) staticData.seenUrls[n.url] = { reportedAt: now };\n  for (const extra of (n.additionalSources || [])) {\n    if (extra) staticData.seenUrls[extra] = { reportedAt: now };\n  }\n}\n\nreturn [{ json: { config: cfg, result } }];\n"
+      },
+      "id": "d13bbaeb-2086-4505-9ae9-8dc0dab849e8",
+      "name": "Update Memory",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1648,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst config = JSON.parse($('Config').first().json.CONFIG_JSON);\nconst result = $input.item.json.result;\nconst dateStr = new Date().toISOString().slice(0, 10);\n\nfunction esc(s) {\n  return (s || '').toString().replace(/([_*`\\[])/g, '\\\\$1');\n}\n\nconst messages = [];\n\nlet msg1 = `━━━━━━━━━━━━━━━━━━\\n`;\nmsg1 += `*تقرير ${config.COMPANY_NAME} اليومي للذكاء الاصطناعي*\\n`;\nmsg1 += `━━━━━━━━━━━━━━━━━━\\n\\n`;\nmsg1 += `📅 التاريخ: ${dateStr}\\n\\n`;\n\nif (result.competitorContent.length) {\n  msg1 += `🔥 *أفضل محتوى المنافسين*\\n\\n`;\n  result.competitorContent.forEach((c, i) => {\n    msg1 += `${i + 1}. ${esc(c.title)}\\n`;\n    msg1 += `المنصة: ${esc(c.platform)}\\n`;\n    msg1 += `الناشر: ${esc(c.creator || 'غير معروف')}\\n`;\n    msg1 += `التفاعل: ${esc(c.engagement)}\\n`;\n    msg1 += `ليه مهم: ${esc(c.whyItMatters)}\\n`;\n    msg1 += `المصدر: ${c.url}\\n\\n---\\n\\n`;\n  });\n} else {\n  msg1 += `🔥 *أفضل محتوى المنافسين*\\nمفيش نتائج تستاهل النهاردة.\\n`;\n}\nmessages.push(msg1);\n\nif (result.news.length) {\n  let msg2 = `🚨 *أخبار الذكاء الاصطناعي والأتمتة*\\n\\n`;\n  result.news.forEach((n, i) => {\n    let entry = `${i + 1}. ${esc(n.headline)}\\n`;\n    entry += `منصة المصدر: ${esc(n.sourcePlatform)}\\n`;\n    entry += `تاريخ النشر: ${esc(n.publishedDate || 'غير متاح للنشر.')}\\n`;\n    entry += `ليه مهم لـ Nexra: ${esc(n.whyItMattersToNexra)}\\n`;\n    entry += `زاوية محتوى مقترحة: ${esc(n.contentAngle)}\\n`;\n    entry += `المصدر: ${n.url}\\n\\n---\\n\\n`;\n\n    if ((msg2 + entry).length > 3900) {\n      messages.push(msg2);\n      msg2 = entry;\n    } else {\n      msg2 += entry;\n    }\n  });\n  messages.push(msg2);\n} else {\n  messages.push(`🚨 *أخبار الذكاء الاصطناعي والأتمتة*\\nمفيش نتائج تستاهل النهاردة.`);\n}\n\nif (result.contentOpportunities.length) {\n  let msg3 = `💡 *أفكار محتوى مقترحة*\\n\\n`;\n  result.contentOpportunities.forEach((o, i) => {\n    msg3 += `${i + 1}. الموضوع: ${esc(o.topic)}\\n`;\n    msg3 += `الزاوية: ${esc(o.angle)}\\n`;\n    msg3 += `ليه هتنجح: ${esc(o.whyItCouldWork)}\\n`;\n    msg3 += `مقترح الافتتاحية (Hook): ${esc(o.suggestedHook)}\\n\\n`;\n  });\n  messages.push(msg3);\n}\n\nreturn messages.map(m => ({ json: { telegramText: m } }));\n"
+      },
+      "id": "fd1316c0-c7b8-496e-9d2a-509cd07acff1",
+      "name": "Format Telegram Report",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1888,
+        128
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "\nconst err = $input.item.json.error || $input.item.json.errorMessage;\nlet text;\n\nif (err) {\n  text = `⚠️ *وكيل أبحاث Nexra - خطأ*\\n\\nتشغيلة البحث النهاردة واجهت مشكلة ومكملتش:\\n\\n${(err.message || err).toString().slice(0, 500)}\\n\\nراجع سجل التنفيذ في n8n للتفاصيل.`;\n} else {\n  text = `✅ *تقرير Nexra اليومي*\\n\\nمفيش محتوى منافسين أو أخبار عالي الجودة اجتاز معايير الفلترة النهاردة. الجودة أهم من الكمية - محبعتش حاجة.`;\n}\n\nreturn [{ json: { telegramText: text } }];\n"
+      },
+      "id": "b84f37cd-b773-41be-b304-358b8dcd5951",
+      "name": "Fallback Message",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        1168,
+        448
+      ]
+    },
+    {
+      "parameters": {
+        "chatId": "7702721248",
+        "text": "={{$json.telegramText}}",
+        "additionalFields": {
+          "parse_mode": "Markdown"
+        }
+      },
+      "id": "590507d6-6d98-4bac-bdae-b51fb05e7634",
+      "name": "Send Telegram Report",
+      "type": "n8n-nodes-base.telegram",
+      "typeVersion": 1.2,
+      "position": [
+        2128,
+        288
+      ],
+      "webhookId": "7962bf27-1857-4df2-b390-74ad6468ae46",
+      "credentials": {
+        "telegramApi": {
+          "id": "oN5C7b5tfN1OoDJh",
+          "name": "Telegram account 4"
+        }
+      },
+      "onError": "continueErrorOutput"
+    },
+    {
+      "parameters": {},
+      "id": "56f30fa7-9727-412b-89e4-ffffe1aecded",
+      "name": "Log Failed Report (kept in execution history)",
+      "type": "n8n-nodes-base.noOp",
+      "typeVersion": 1,
+      "position": [
+        2128,
+        496
+      ]
+    }
+  ],
+  "pinData": {},
+  "connections": {
+    "Schedule Trigger": {
+      "main": [
+        [
+          {
+            "node": "Config",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Config": {
+      "main": [
+        [
+          {
+            "node": "Build News Queries",
+            "type": "main",
+            "index": 0
+          },
+          {
+            "node": "Build Competitor Queries",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build News Queries": {
+      "main": [
+        [
+          {
+            "node": "Fetch News RSS",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build Competitor Queries": {
+      "main": [
+        [
+          {
+            "node": "Search Competitors (Google CSE)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fetch News RSS": {
+      "main": [
+        [
+          {
+            "node": "Normalize News",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Search Competitors (Google CSE)": {
+      "main": [
+        [
+          {
+            "node": "Normalize Competitor Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize News": {
+      "main": [
+        [
+          {
+            "node": "Dedupe & Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Competitor Results": {
+      "main": [
+        [
+          {
+            "node": "Dedupe & Filter",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Dedupe & Filter": {
+      "main": [
+        [
+          {
+            "node": "Have New Items?",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Have New Items?": {
+      "main": [
+        [
+          {
+            "node": "Build AI Prompt",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fallback Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Build AI Prompt": {
+      "main": [
+        [
+          {
+            "node": "AI Research Analyst (Gemini)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse AI Output": {
+      "main": [
+        [
+          {
+            "node": "Update Memory",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fallback Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Memory": {
+      "main": [
+        [
+          {
+            "node": "Format Telegram Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Telegram Report": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Fallback Message": {
+      "main": [
+        [
+          {
+            "node": "Send Telegram Report",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Send Telegram Report": {
+      "main": [
+        [],
+        [
+          {
+            "node": "Log Failed Report (kept in execution history)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Research Analyst (Gemini)": {
+      "main": [
+        [
+          {
+            "node": "Parse AI Output",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Fallback Message",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "active": true,
+  "settings": {
+    "executionOrder": "v1",
+    "binaryMode": "separate",
+    "timeSavedMode": "fixed",
+    "callerPolicy": "workflowsFromSameOwner",
+    "executionTimeout": -1,
+    "availableInMCP": false
+  },
+  "versionId": "a5d87263-f369-4249-8af2-53bbbb5349d7",
+  "meta": {
+    "templateCredsSetupCompleted": true,
+    "instanceId": "375a2402e8084e0d4e11fc4a0cf2da46d84c00717bfe7e2087d5795b3c8d77b9"
+  },
+  "nodeGroups": [],
+  "id": "b5D9Ah02uKoA4L9t",
+  "tags": []
+}
